@@ -1,26 +1,36 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from passlib.context import CryptContext
+import jwt
 
-from ..database import get_db
-from .. import models, schemas
+from ..database import SessionLocal
+from ..models import User
+from ..schemas import UserCreate, UserLogin
 
 router = APIRouter()
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+SECRET_KEY = "mysecretkey"
+ALGORITHM = "HS256"
 
-def hash_password(password: str):
-    return pwd_context.hash(password)
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 
 @router.post("/signup")
-def signup(user: schemas.UserCreate, db: Session = Depends(get_db)):
+def signup(user: UserCreate, db: Session = Depends(get_db)):
     
-    hashed_password = hash_password(user.password)
+    existing_user = db.query(User).filter(User.email == user.email).first()
 
-    new_user = models.User(
+    if existing_user:
+        raise HTTPException(status_code=400, detail="email already exists")
+
+    new_user = User(
         email=user.email,
-        password=hashed_password
+        password=user.password
     )
 
     db.add(new_user)
@@ -30,4 +40,27 @@ def signup(user: schemas.UserCreate, db: Session = Depends(get_db)):
     return {
         "message": "user created",
         "user_id": new_user.id
+    }
+
+
+@router.post("/login")
+def login(user: UserLogin, db: Session = Depends(get_db)):
+
+    db_user = db.query(User).filter(User.email == user.email).first()
+
+    if not db_user:
+        raise HTTPException(status_code=400, detail="invalid email")
+
+    if db_user.password != user.password:
+        raise HTTPException(status_code=400, detail="invalid password")
+
+    token = jwt.encode(
+        {"user_id": db_user.id},
+        SECRET_KEY,
+        algorithm=ALGORITHM
+    )
+
+    return {
+        "access_token": token,
+        "token_type": "bearer"
     }
